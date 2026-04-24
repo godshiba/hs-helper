@@ -1,0 +1,56 @@
+    private func startObservingGameController() {
+        observationTask = Task { [weak self] in
+            guard let self else { return }
+            // Poll the observable at ~5 Hz — sufficient for UI updates.
+            // A proper withObservationTracking loop would be cleaner but
+            // requires careful setup across async contexts.
+            var lastPhase: GamePhase? = nil
+            var lastResult: GameResult? = nil
+            var wasRunning = self.installer.hearthstoneIsRunning
+
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(200))
+
+                let phase = self.gameController.currentGame?.phase
+                let result = self.gameController.currentGame?.result
+                let isRunning = self.installer.hearthstoneIsRunning
+
+                // Show / hide overlays based on phase.
+                if !isRunning {
+                    if self.playerOverlay.isVisible || self.opponentOverlay.isVisible {
+                        await MainActor.run {
+                            self.playerOverlay.hide()
+                            self.opponentOverlay.hide()
+                        }
+                    }
+                    lastPhase = nil
+                } else {
+                    // Hearthstone just launched (or re-launched): re-show the
+                    // overlay even when the phase hasn't changed.
+                    if isRunning != wasRunning, self.prefs.showOverlay {
+                        await MainActor.run {
+                            if !self.playerOverlay.isVisible {
+                                self.showOverlays()
+                            }
+                        }
+                    }
+                    if phase != lastPhase {
+                        await MainActor.run {
+                            self.handlePhaseChange(phase: phase)
+                        }
+                        lastPhase = phase
+                    }
+                }
+
+                if result != lastResult || isRunning != wasRunning {
+                    await MainActor.run {
+                        self.updateMenuBar()
+                    }
+                    lastResult = result
+                    wasRunning = isRunning
+                }
+            }
+        }
+    }
+
+    private func handlePhaseChange(phase: GamePhase?) {
