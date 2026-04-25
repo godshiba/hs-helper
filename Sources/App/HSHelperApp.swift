@@ -51,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var gameController = GameController(cardDB: cardDB)
     private let deckStore: DeckStore? = try? DeckStore()
     private let installer = LogConfigInstaller.shared
-    private let prefs = AppPreferences.shared
+    @ObservedObject private var prefs = AppPreferences.shared
 
     // Cached on MainActor after async load — avoids crossing actor boundary in sync code.
     private var cardDBLoaded: Bool = false
@@ -289,7 +289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             self.handlePhaseChange(phase: phase)
                         }
                         lastPhase = phase
-                    } else if phase != lastPhase {
+                    } else if phase != lastPhase || !wasRunning {
                         await MainActor.run {
                             self.handlePhaseChange(phase: phase)
                         }

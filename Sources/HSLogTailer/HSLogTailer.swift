@@ -139,6 +139,12 @@ public actor HSLogTailer {
         activeLogPath = pathToOpen
         fileDescriptor = fd
 
+        // If offset is 0, attempt to find the start of the current match to avoid
+        // flooding the main thread with old games from this session.
+        if offset == 0 {
+            findInitialOffset()
+        }
+
         // On initial open read everything already in the file so we don't miss
         // lines that were written before we started (e.g. app launched mid-game).
         readNewBytes()
@@ -223,13 +229,67 @@ public actor HSLogTailer {
             let lineData = unparsedData[..<newlineIndex]
             unparsedData.removeSubrange(...newlineIndex)
 
-            if let line = String(data: lineData, encoding: .utf8) {
+            let line = String(decoding: lineData, as: UTF8.self)
+            if true {
                 let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
                     continuation?.yield(trimmed)
                 }
             }
         }
+    }
+
+    private func findInitialOffset() {
+        guard fileDescriptor != -1 else { return }
+
+        let fileSize = lseek(fileDescriptor, 0, SEEK_END)
+        guard fileSize > 0 else {
+            offset = 0
+            return
+        }
+
+        if activeLogPath.contains("Power.log") {
+            let chunkSize: off_t = 256 * 1024
+            var currentPos = fileSize
+            var overlap = Data()
+            let createGameData = Data("CREATE_GAME".utf8)
+            let newline = Data("\n".utf8).first!
+
+            while currentPos > 0 {
+                let readSize = min(chunkSize, currentPos)
+                currentPos -= readSize
+
+                lseek(fileDescriptor, currentPos, SEEK_SET)
+                var buffer = [UInt8](repeating: 0, count: Int(readSize))
+                let bytesRead = Darwin.read(fileDescriptor, &buffer, Int(readSize))
+
+                if bytesRead <= 0 { break }
+
+                var data = Data(buffer[..<bytesRead])
+                data.append(overlap)
+
+                if let range = data.range(of: createGameData, options: .backwards) {
+                    var startOfLine = range.lowerBound
+                    while startOfLine > data.startIndex {
+                        if data[startOfLine - 1] == newline {
+                            break
+                        }
+                        startOfLine -= 1
+                    }
+                    let byteDistance = data.distance(from: data.startIndex, to: startOfLine)
+                    offset = UInt64(currentPos) + UInt64(byteDistance)
+                    return
+                }
+
+                if data.count > 100 {
+                    overlap = data.suffix(100)
+                } else {
+                    overlap = data
+                }
+            }
+        }
+
+        offset = 0
     }
 
     private func startPolling() {

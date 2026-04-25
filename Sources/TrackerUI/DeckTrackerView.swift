@@ -93,18 +93,7 @@ struct OwnDeckPanel: View {
     let game: Game
 
     private var remainingCards: [TrackedCard] {
-        var counts: [String: Int] = [:]
-        for entity in game.entities(in: .deck, for: .player) {
-            if let cid = entity.cardId, !cid.isEmpty {
-                counts[cid, default: 0] += 1
-            }
-        }
-        return game.player.deckList.map { entry in
-            let remaining = counts[entry.card.id] ?? 0
-            var tracked = TrackedCard(card: entry.card, count: remaining)
-            tracked.drawnCount = entry.count - remaining
-            return tracked
-        }.sorted {
+        game.player.remainingDeck.sorted {
             if $0.card.cost != $1.card.cost { return $0.card.cost < $1.card.cost }
             return $0.card.name < $1.card.name
         }
@@ -152,6 +141,18 @@ struct OwnDeckPanel: View {
                         trailing: "\(topDeckOdds)%",
                         trailingColor: Tokens.accentBlue
                     )
+                    if game.counters.playerSpellsPlayed > 0
+                        || game.counters.playerMinionsKilled > 0
+                    {
+                        StatsRow(
+                            icon: "wand.and.stars",
+                            iconColor: Tokens.textSecondary,
+                            label: "\("Spells".localized): \(game.counters.playerSpellsPlayed)",
+                            trailing:
+                                "\("Deaths".localized): \(game.counters.playerMinionsKilled + game.counters.opponentMinionsKilled)",
+                            trailingColor: Tokens.textSecondary
+                        )
+                    }
                 }
 
                 SectionLabel(text: "\("DECK".localized) (\(totalRemaining) / \(deckCapacity))")
@@ -196,12 +197,15 @@ struct OwnDeckPanel: View {
 
     private func rowState(for tracked: TrackedCard) -> CardRow.RowState {
         if tracked.count <= 0 { return .drawn }
+        if tracked.drawnCount > 0 { return .justDrew }
         return .normal
     }
 
     private func trailing(for tracked: TrackedCard) -> CardRow.Trailing {
-        if tracked.count >= 2 { return .count(tracked.count) }
-        return .none
+        if tracked.isCreated { return .label("GEN") }
+        let originalCount = tracked.count + tracked.drawnCount
+        guard originalCount >= 2, tracked.count > 0 else { return .none }
+        return .count(tracked.count)
     }
 
     private func costColor(for rarity: Rarity) -> Color {
@@ -219,6 +223,7 @@ struct OpponentPanel: View {
     let cardDB: CardDB
 
     @State private var groupedCards: [TrackedCard] = []
+    @State private var knownHand: [TrackedCard] = []
     @State private var lastPlayedName: String = ""
     @State private var lastPlayedTurn: Int = 0
 
@@ -246,14 +251,36 @@ struct OpponentPanel: View {
                 )
 
                 if showResourcesRow {
-                    HStack(spacing: 0) {
+                    StatsRow(
+                        icon: "square.stack.3d.up.fill",
+                        iconColor: Tokens.textSecondary,
+                        label: "\("Hand".localized) \(handCount)",
+                        trailing: fatigue > 0 ? "\("Fatigue".localized) \(fatigue)" : "",
+                        trailingColor: fatigue > 0 ? .red : Tokens.textTertiary
+                    )
+                    if game.counters.opponentSpellsPlayed > 0 {
                         StatsRow(
-                            icon: "square.stack.3d.up.fill",
+                            icon: "wand.and.stars",
                             iconColor: Tokens.textSecondary,
-                            label: "\("Hand".localized) \(handCount)",
-                            trailing: fatigue > 0 ? "\("Fatigue".localized) \(fatigue)" : "",
-                            trailingColor: fatigue > 0 ? .red : Tokens.textTertiary
+                            label: "\("Spells".localized): \(game.counters.opponentSpellsPlayed)",
+                            trailing: "",
+                            trailingColor: Tokens.textTertiary
                         )
+                    }
+                }
+
+                if !knownHand.isEmpty {
+                    SectionLabel(text: "\("IN HAND".localized) (\(knownHand.count))")
+                    LazyVStack(spacing: 3) {
+                        ForEach(knownHand) { tracked in
+                            CardRow(
+                                cost: tracked.card.cost,
+                                name: tracked.card.name,
+                                state: .normal,
+                                trailing: tracked.count >= 2 ? .count(tracked.count) : .none,
+                                costColor: Tokens.textPrimary
+                            )
+                        }
                     }
                 }
 
@@ -309,6 +336,9 @@ struct OpponentPanel: View {
         .task(id: game.opponent.cardsPlayed.count) {
             await resolvePlayedCards()
         }
+        .task(id: Set(game.opponent.knownInHand.values)) {
+            await resolveKnownHand()
+        }
     }
 
     private var footerText: String {
@@ -353,6 +383,28 @@ struct OpponentPanel: View {
             self.lastPlayedName = ""
             self.lastPlayedTurn = 0
         }
+    }
+
+    private func resolveKnownHand() async {
+        let cardIds = Array(game.opponent.knownInHand.values)
+        guard !cardIds.isEmpty else {
+            self.knownHand = []
+            return
+        }
+        var counts: [String: Int] = [:]
+        for cardId in cardIds { counts[cardId, default: 0] += 1 }
+
+        var resolved: [TrackedCard] = []
+        for (cardId, count) in counts {
+            if let card = await cardDB.card(id: cardId) {
+                resolved.append(TrackedCard(card: card, count: count))
+            }
+        }
+        resolved.sort {
+            if $0.card.cost != $1.card.cost { return $0.card.cost < $1.card.cost }
+            return $0.card.name < $1.card.name
+        }
+        self.knownHand = resolved
     }
 }
 

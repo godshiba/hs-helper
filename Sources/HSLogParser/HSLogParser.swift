@@ -151,17 +151,11 @@ public final class HSLogParser: @unchecked Sendable {
 
     /// Strip everything up to and including the last " - " delimiter.
     private func powerContent(from line: String) -> String? {
-        // Hearthstone prints every event TWICE:
-        //
-        //   GameState.DebugPrintPower()    — the authoritative event stream
-        //   PowerTaskList.DebugPrintPower() — a debug reprint of the same state
-        //
-        // Processing both double-applies every zone transition / tag change
-        // and corrupts the reducer. Accept only the GameState stream.
-        //
-        // `DebugPrintPowerList()` (with "List") prints `Count=N` headers that
-        // aren't events either.
-        guard line.contains("GameState.DebugPrintPower() - ") else { return nil }
+        if !line.contains("GameState.DebugPrintPower() - ")
+            && !line.contains("PowerTaskList.DebugPrintPower() - ")
+        {
+            return nil
+        }
         guard let range = line.range(of: ") - ") else { return nil }
         let content = String(line[range.upperBound...])
         return content
@@ -651,10 +645,10 @@ public final class HSLogParser: @unchecked Sendable {
 
         // Entity continuation line
         if content.hasPrefix("Entities[") {
-            if case .choices(let id, let pid, let ct, var eids) = state {
+            if case .choices(let id, let pname, let ct, var eids) = state {
                 if let eid = parseEntityListLine(content) {
                     eids.append(eid)
-                    state = .choices(id: id, playerId: pid, choiceType: ct, entityIds: eids)
+                    state = .choices(id: id, playerName: pname, choiceType: ct, entityIds: eids)
                 }
             }
             return []
@@ -665,15 +659,12 @@ public final class HSLogParser: @unchecked Sendable {
 
         guard let id = extractInt(content, key: "id") else { return flushed }
 
-        var playerId = 0
-        if let pidRange = content.range(of: "TaskList=") {
-            // Player name is between "Player=" and " TaskList=", but it can contain spaces
-            // fall back: use PlayerID from the Player entity map — for now store 0
-            // We'll resolve from context in GameState reducer.
-            _ = pidRange
+        var playerName = ""
+        if let playerRange = content.range(of: "Player="),
+            let taskRange = content.range(of: " TaskList=")
+        {
+            playerName = String(content[playerRange.upperBound..<taskRange.lowerBound])
         }
-        // Try to get playerId from a different key if available.
-        playerId = extractInt(content, key: "PlayerID") ?? 0
 
         var choiceType: ChoiceType = .general
         if let ctRange = content.range(of: "ChoiceType="),

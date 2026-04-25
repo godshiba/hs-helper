@@ -1,204 +1,151 @@
 # hs-helper — Native macOS Hearthstone Deck Tracker
 
-**Goal:** A native, Apple-Silicon-first macOS app that mirrors the core value of HearthstoneDeckTracker (HDT): live in-game deck tracking, opponent card memory, mulligan assistant, and (stretch) HSReplay upload — all driven by Hearthstone's own log files, with zero memory reading or game hooking.
-
-**Non-goals (v1):** Windows/Linux support, arena draft helper, battlegrounds, Twitch overlay, cloud sync.
+**Goal:** A native, Apple-Silicon-first macOS overlay that gives you everything HDT gives Windows users — live deck tracking, opponent memory, game stats — driven purely by Hearthstone's log files. Zero memory reading, zero game hooking.
 
 ---
 
-## 1. How this actually works
+## Current State (as of April 2026)
 
-HDT's architecture is log-driven. Hearthstone writes structured game-state logs to disk; the tracker tails them and reconstructs a model of the game. We do the same thing, natively.
+The app is feature-complete for core tracking. All major HDT patterns have been ported.
 
-### 1.1 Data source
-- **Log folder:** `~/Library/Logs/Blizzard/Hearthstone/`
-- **Key files:** `Power.log` (game state + cards), `Zone.log` (zone transitions), `Decks.log` (deck selection), `LoadingScreen.log` (scene).
-- **Enablement:** Create/update `~/Library/Preferences/Blizzard/Hearthstone/log.config` with `[Power]`, `[Zone]`, `[Decks]`, `[LoadingScreen]` sections — `LogLevel=1`, `FilePrinting=true`, `ConsolePrinting=false`. The app installs this on first run.
-- **Card data:** [HearthstoneJSON](https://hearthstonejson.com) (`cards.collectible.json`) + CDN card images. Cached locally, versioned per patch.
+### What works today
 
-### 1.2 No game hooking
-We never inject, never read HS memory, never call private APIs. This keeps us inside Blizzard's ToS (HDT operates the same way).
+| Area | Status |
+|---|---|
+| Log tailing (Power, Zone, Decks, LoadingScreen) | Done |
+| Full entity/tag/block reducer | Done |
+| Own deck panel — remaining cards, x2 badge, draw highlight | Done |
+| Generated cards (shuffled mid-game) — GEN label, live count | Done |
+| Wild mode local-player detection (post-deck-load re-verify) | Done |
+| New game detection and auto-reset between games | Done |
+| Opponent panel — cards played, last played, hand count, fatigue | Done |
+| Opponent panel — known hand cards (IN HAND section) | Done |
+| Entity.info.created / stolen flags | Done |
+| Game counters — spells, minions played/killed, cards drawn | Done |
+| Stats persistence — GameRecord JSON to Application Support | Done |
+| Menu bar status item | Done |
+| Overlay NSPanel (floats over HS, drag to reposition, lock) | Done |
+| Preferences window | Done |
+| log.config auto-installer | Done |
+| CardDB — HearthstoneJSON load, card lookup by ID and dbfId | Done |
+| DeckStore — deckstring codec, SwiftData persistence | Done |
 
 ---
 
-## 2. Architecture
-
-Modular Swift package layout. Each module has one responsibility, one public surface, ~200–400 LOC target.
+## Architecture
 
 ```
-hs-helper/
-├── App/                     # SwiftUI app entry, AppDelegate, lifecycle
-├── Packages/
-│   ├── HSLogTailer/         # File-tail primitive: GCD + FSEvents
-│   ├── HSLogParser/         # Line → typed event (state machine)
-│   ├── GameState/           # Pure-Swift reducer: events → Game model
-│   ├── CardDB/              # HearthstoneJSON loader, image cache, search
-│   ├── DeckStore/           # SwiftData: decks, deckstring codec, import
-│   ├── Overlay/             # AppKit NSPanel overlay, floats over HS
-│   ├── TrackerUI/           # SwiftUI views: deck list, opponent panel
-│   ├── Settings/            # Preferences window, log.config installer
-│   └── Replay/              # (stretch) HSReplay upload client
-└── Tests/                   # Per-package XCTest + fixture logs
+Power.log ──► HSLogTailer ──► HSLogParser ──► apply(event:to:) ──► Game (value type)
+                                                                        │
+                                                              GameController (@Observable)
+                                                                        │
+                                                    ┌───────────────────┴───────────────────┐
+                                               OwnDeckPanel                         OpponentPanel
+                                           (DeckTrackerView)                    (OpponentPanelView)
 ```
 
-### 2.1 Data flow
+**Key design rules:**
+- `apply(event:to:)` is a pure free function — no I/O, fully testable with log fixtures
+- `GameController` is `@Observable @MainActor` — SwiftUI observes it directly
+- All game state is value types (`struct`, `enum`) — safe across actor boundaries
+- `StatsStore` is an actor — all disk I/O serialised off the main thread
+
+### Module layout
 
 ```
-Power.log ──► HSLogTailer ──► HSLogParser ──► GameState reducer ──► @Observable Game
-                                                                         │
-                                                                         ▼
-                                                           Overlay (AppKit) + TrackerUI (SwiftUI)
-```
-
-- **One-way flow.** UI observes `Game`; never mutates it.
-- **Reducer is pure.** Given `(Game, Event) → Game`. Trivially testable with recorded log fixtures.
-- **Tailer is dumb.** Emits lines; knows nothing about cards.
-
-### 2.2 Overlay window (the tricky part)
-
-- `NSPanel` subclass with:
-  - `level = .statusBar` (above `.floating`, below system UI)
-  - `collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]` — the `.fullScreenAuxiliary` flag is what lets it render over HS when HS is in Spaces-fullscreen
-  - `styleMask = [.borderless, .nonactivatingPanel]`
-  - `backgroundColor = .clear`, `isOpaque = false`, `hasShadow = false`
-  - `ignoresMouseEvents = true` by default; toggled off only while user is dragging/resizing
-- **Positioning:** persisted per monitor; "Lock overlay" toggle in menu bar.
-- **Hearthstone window mode:** Borderless Windowed is fully supported. True exclusive fullscreen on macOS is rare for HS — if a user hits issues, docs point them to Borderless.
-- **Metal compatibility:** SwiftUI-inside-NSPanel works because the panel is a plain layer-backed window; HS's Metal layer is in its own process. No CGWindowServer trickery needed.
-
-### 2.3 State model (sketch)
-
-```swift
-struct Game {
-    var matchID: UUID
-    var format: Format           // standard | wild | classic | twist
-    var mode: Mode               // ranked | casual | friendly | adventure
-    var player: Side
-    var opponent: Side
-    var turn: Int
-    var phase: Phase             // mulligan | main | gameOver
-    var events: [GameEvent]      // append-only timeline, drives undo + replay
-}
-
-struct Side {
-    var hero: Card?
-    var deck: Deck?              // nil for opponent until cards are revealed
-    var hand: [CardInstance]     // known + unknown slots
-    var board: [CardInstance]
-    var graveyard: [CardInstance]
-    var cardsPlayed: [Card]
-    var resources: Resources     // mana, health, armor, fatigue counter
-}
+Sources/
+├── App/            SwiftUI @main, AppDelegate, menu bar
+├── HSLogTailer/    File-tail primitive (DispatchSource + FSEvents)
+├── HSLogParser/    Line → LogEvent state machine
+├── GameState/      Reducer, Game model, StatsStore
+├── CardDB/         HearthstoneJSON loader + card lookup
+├── DeckStore/      SwiftData decks, deckstring codec
+├── Overlay/        NSPanel overlay controller
+├── TrackerUI/      SwiftUI overlay views
+└── Settings/       Preferences + log.config installer
 ```
 
 ---
 
-## 3. Stack
+## Gaps vs HDT — what's left
 
-| Concern | Choice | Why |
-|---|---|---|
-| Language | Swift 6 (strict concurrency) | Native, first-class on macOS, actor isolation fits our pipeline |
-| UI | SwiftUI + AppKit (`NSPanel`) | SwiftUI for panels/settings, AppKit for overlay window behavior SwiftUI can't do |
-| Persistence | SwiftData | Decks, settings, match history. Lightweight, no SQLite boilerplate |
-| File tailing | `DispatchSource.makeFileSystemObjectSource` + `FileHandle` | Kernel-level, low CPU. FSEvents as fallback for rotation |
-| HTTP | `URLSession` async/await | HearthstoneJSON fetch, HSReplay upload |
-| Image cache | `NSCache` + disk LRU in `Application Support` | Card art, hero portraits |
-| Distribution | Developer ID signed + notarized DMG | Bypasses Gatekeeper. No Mac App Store — we need broad file access under `~/Library/Logs/` |
-| Min target | macOS 14 Sonoma | `@Observable`, SwiftData, modern concurrency |
-| Build | Swift Package Manager + Xcode project | One workspace, SPM packages for modules |
-| Tests | XCTest + recorded `.log` fixtures | Replay real games against the reducer |
-| CI | GitHub Actions (macOS runners) | Build, test, sign, notarize on tag |
+These are the remaining meaningful gaps between hs-helper and HDT, ordered by value.
 
----
+### 1. Secrets tracker (medium effort, high value)
+Track which opponent secrets are still possible based on game events.
+Each event eliminates secrets that could not have triggered (e.g. you attacked → Explosive Trap, Freezing Trap still live; Snipe eliminated).
 
-## 4. Phased plan
+HDT reference: `Hearthstone Deck Tracker/Hearthstone/Secrets/SecretsManager.cs`
 
-Built in thin vertical slices — each phase produces a runnable app, not a pile of scaffolding.
+Implementation path:
+- Create a `SecretsTracker` struct in `GameState` with a set of remaining possible secrets per class
+- Hook into `handleZoneChange`, `handleTagSideEffects`, and block events to eliminate secrets
+- Show remaining possibilities in the opponent panel under the IN HAND section
+- Needs a data table: `[CardId: [EliminationCondition]]` — one entry per secret
 
-### Phase 0 — Spike (2–3 days)
-Prove the two scariest unknowns before committing.
-- [ ] Tail `Power.log` while a real HS match runs; dump lines to stdout.
-- [ ] Draw a red rectangle `NSPanel` that stays visible over Hearthstone in Borderless Windowed.
-- **Exit criteria:** can see log lines in real time AND see overlay pinned over HS. If either fails, reassess.
+### 2. Match history view (low effort, high value)
+`StatsStore` already persists `GameRecord` to disk. Need a SwiftUI view to display it.
 
-### Phase 1 — Own deck tracker (1–2 weeks)
-The MVP. One user, one deck, live updates.
-- [ ] `HSLogTailer`: file tail with rotation handling.
-- [ ] `HSLogParser`: minimal subset — `CREATE_GAME`, `TAG_CHANGE`, `SHOW_ENTITY`, `FULL_ENTITY`, zone transitions.
-- [ ] `GameState` reducer: tracks own deck, own hand, cards drawn.
-- [ ] `CardDB`: load HearthstoneJSON, lookup by `dbfId` / `cardId`.
-- [ ] `DeckStore`: paste deckstring → stored deck. Swift port of HS deckstring codec (varint + base64).
-- [ ] `Overlay` + `TrackerUI`: floating list of remaining cards, count badges, dim on draw.
-- [ ] `Settings`: installs `log.config`, pick monitor, toggle lock.
-- **Exit criteria:** start HS, play a match with a saved deck, see the card list decrement correctly in real time.
+- Win/loss record per deck and per class
+- Filter by mode (Ranked, Casual, etc.) and format (Standard, Wild)
+- Total games played, overall win rate
+- Open from menu bar → "Match History…"
 
-### Phase 2 — Opponent tracking (1 week)
-- [ ] Extend reducer: opponent hand size, cards played, revealed cards, graveyard.
-- [ ] Opponent panel on the right side of the screen.
-- [ ] Fatigue counter, secrets tracker.
-- **Exit criteria:** full match replay-from-log produces the correct final opponent-played list.
+### 3. Related cards / token tracking (low-medium effort)
+Show what a card generates when played — tokens, discovers, copies.
 
-### Phase 3 — Mulligan + deck import (3–4 days)
-- [ ] Detect mulligan phase; show deck odds overlay during it.
-- [ ] Import from Hearthstone's in-game "Copy Deck" clipboard (auto-detect on launch).
-- [ ] Deck editor: search, filter by class/cost, export deckstring.
+HDT reference: `Hearthstone Deck Tracker/Hearthstone/RelatedCardsSystem/`
 
-### Phase 4 — Polish + ship (1 week)
-- [ ] Match history view with won/lost, deck, opponent class, duration.
-- [ ] Keyboard shortcuts, menu-bar item.
-- [ ] Auto-update (Sparkle).
-- [ ] Developer ID signing + notarization in CI.
-- [ ] README, screenshots, DMG release.
-- **Ship v1.**
+- Maintain a data table: `[cardId: [relatedCardId]]` (can be derived from HearthstoneJSON `mechanics` + `referencedTags`)
+- Show related cards as a tooltip or sub-row in the deck panel
 
-### Phase 5 — Stretch
-- [ ] HSReplay upload.
-- [ ] Arena draft helper (HearthArena-style tier list).
-- [ ] Battlegrounds MMR + hero picker.
-- [ ] iCloud sync for decks.
+### 4. Opponent deck prediction (medium effort)
+Infer what the opponent is likely playing based on revealed cards.
 
----
+- When enough cards are revealed, match against known decklists from HSReplay or a bundled archetype DB
+- Show predicted archetype name ("Flood Paladin", "Control Warrior") in the opponent header
+- HDT does this via HSReplay API; we can start with a bundled archetype signature file
 
-## 5. Risks + mitigations
+### 5. Mulligan guide (high effort, requires API)
+Show keep/replace recommendations during mulligan based on HSReplay win-rate data.
 
-| Risk | Likelihood | Mitigation |
-|---|---|---|
-| Log format changes on patch | Medium | Version-gate the parser; ship a hotfix path. Fixture corpus catches regressions. |
-| Overlay fails in true fullscreen | Low-Medium | Default docs recommend Borderless; detect and warn. `.fullScreenAuxiliary` covers most cases. |
-| HearthstoneJSON stops updating | Low | Fallback: pull from HearthSim's `python-hearthstone` data dumps, or scrape HS Press Kit. |
-| Blizzard ToS shifts | Low | We read our own user's logs — same posture as HDT for 10+ years. Monitor ToS; no game hooks ever. |
-| Apple Silicon / Intel parity | Low | Universal binary from day one. CI builds both. |
-| Card art licensing | Medium | HearthstoneJSON links to Blizzard CDN assets; HDT precedent. Add a "remove images" fallback if ever challenged. |
+- Requires HSReplay OAuth + API calls during mulligan phase
+- HDT reference: `Controls/Overlay/Constructed/Mulligan/`
+- Phase 1: just show deck odds (already there as "top deck odds %")
+- Phase 2: fetch per-card mulligan win rates from HSReplay and display as +/- indicators
+
+### 6. Arena draft helper (separate feature, medium effort)
+Show tier ratings for each offered card during arena draft.
+
+- Trigger: `HSScene.gameplay` with game mode `.arena` during a choice event
+- Data: HearthArena or Lightforge tier lists (bundled JSON, refreshed on launch)
+- Show tier + rating in a small overlay during the pick phase
+
+### 7. HSReplay upload (medium effort, nice to have)
+Upload completed games as `.hsreplay` files.
+
+- `game.timeline` already records every `LogEvent` in order — replay export is straightforward
+- Need OAuth flow + `URLSession` upload to `api.hsreplay.net`
+- HDT reference: `HsReplay/ApiWrapper.cs`
+
+### 8. Auto-update (Sparkle, low effort)
+Ship updates via a Sparkle appcast. Notarized DMG on GitHub Releases, appcast XML at a fixed URL.
 
 ---
 
-## 6. Open questions (decide before Phase 1)
+## Known limitations
 
-1. **App name + bundle ID.** `hs-helper` is the repo; need a real product name. Suggestion: something not-Blizzard-trademarked.
-2. **Free / paid / donation?** Affects notarization cost amortization and whether we need a license server.
-3. **Open source?** HDT is GPLv3. Going MIT/Apache vs. GPL changes what code we can port vs. must clean-room.
-4. **Deck stats scope.** Just win/loss, or per-card mulligan stats like HSReplay? The latter is a lot more UI.
-5. **Minimum macOS.** 14 (Sonoma) gives us `@Observable` and matters for perf; 13 widens audience. Lean 14.
-
----
-
-## 7. Effort estimate
-
-Solo dev, part-time:
-- Phase 0: **3 days**
-- Phase 1: **2 weeks**
-- Phase 2: **1 week**
-- Phase 3: **4 days**
-- Phase 4: **1 week**
-- **Total to v1: ~5 weeks.**
-
-Full-time, experienced Swift + one prior log-parsing project: ~3 weeks to v1.
+| Issue | Notes |
+|---|---|
+| True exclusive fullscreen | Borderless Windowed is the recommended HS window mode. `.fullScreenAuxiliary` covers Spaces fullscreen. |
+| Opponent deck identification | We see played cards only — no deck prediction yet (see gap #4 above). |
+| Wild: detection relies on deckstring | If a game starts before the deckstring is received, `verifyLocalPlayerAssignment()` corrects it post-load. |
+| Log format changes | Parser is version-gated via fixture corpus. A breaking patch needs a parser hotfix. |
 
 ---
 
-## 8. First concrete steps
+## Next concrete steps
 
-1. Answer the 5 open questions in §6.
-2. Spin up Xcode workspace + SPM package skeleton.
-3. Phase 0 spike in a throwaway branch.
-4. If spike passes: tag `v0.0.1-spike`, start Phase 1 for real.
+1. **Match history view** — wire `StatsStore.allRecords()` into a new SwiftUI sheet opened from the menu bar. Simplest possible table: date, result, own class vs opponent class, turns.
+2. **Secrets tracker** — start with Mage and Paladin (most common in Ranked). Build the elimination rule table, add the UI row to the opponent panel.
+3. **Related cards tooltip** — add a hover interaction to `CardRow` that shows tokens/generates in a popover.
