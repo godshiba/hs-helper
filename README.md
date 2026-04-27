@@ -45,8 +45,6 @@ This project implements a unidirectional data flow and separates pure parsing lo
 3. **`GameReducer` & `GameController`:** Applies `LogEvent` items against a `Game` state struct. The `@Observable @MainActor` GameController acts as the single source of truth for the views.
 4. **`TrackerUI`:** SwiftUI overlays that solely observe the `GameState`—they never mutate it directly.
 
-See [`CLAUDE.md`](CLAUDE.md) for deeper technical guidelines and architecture specifics.
-
 ## Configuration (log.config)
 For `hs-helper` to track matches, Hearthstone must output logs. The app automatically attempts to configure this for you on launch by installing a standard `log.config` in `~/Library/Preferences/Blizzard/Hearthstone/`. If tracking isn't working, make sure Hearthstone was restarted after launching the tracker!
 
