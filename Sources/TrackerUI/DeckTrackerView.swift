@@ -13,6 +13,7 @@
 import CardDB
 import GameState
 import SwiftUI
+import Observation
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MARK: - Localisation Helper
@@ -52,9 +53,11 @@ private enum Tokens {
 
 public struct DeckTrackerView: View {
 
-    @Environment(GameController.self) private var gameController
+    public let gameController: GameController
 
-    public init() {}
+    public init(gameController: GameController) {
+        self.gameController = gameController
+    }
 
     public var body: some View {
         if let game = gameController.currentGame {
@@ -71,9 +74,11 @@ public struct DeckTrackerView: View {
 
 public struct OpponentPanelView: View {
 
-    @Environment(GameController.self) private var gameController
+    public let gameController: GameController
 
-    public init() {}
+    public init(gameController: GameController) {
+        self.gameController = gameController
+    }
 
     public var body: some View {
         if let game = gameController.currentGame {
@@ -93,7 +98,39 @@ struct OwnDeckPanel: View {
     let game: Game
 
     private var remainingCards: [TrackedCard] {
-        game.player.remainingDeck.sorted {
+        var originalRemaining: [String: Int] = [:]
+        var createdCounts: [String: Int] = [:]
+
+        for entity in game.entities(in: .deck, for: .player) {
+            if let cid = entity.cardId, !cid.isEmpty {
+                if entity.info.created {
+                    createdCounts[cid, default: 0] += 1
+                } else {
+                    originalRemaining[cid, default: 0] += 1
+                }
+            }
+        }
+
+        var result: [TrackedCard] = []
+
+        // 1. Original deck entries
+        for entry in game.player.deckList {
+            let count = originalRemaining[entry.card.id] ?? 0
+            var tracked = TrackedCard(card: entry.card, count: count)
+            tracked.drawnCount = entry.count - count
+            result.append(tracked)
+        }
+
+        // 2. Extra generated / shuffled cards
+        for extra in game.player.remainingDeck where extra.isCreated {
+            var tracked = extra
+            tracked.count = createdCounts[extra.card.id] ?? 0
+            if tracked.count > 0 {
+                result.append(tracked)
+            }
+        }
+
+        return result.sorted {
             if $0.card.cost != $1.card.cost { return $0.card.cost < $1.card.cost }
             return $0.card.name < $1.card.name
         }
@@ -202,7 +239,9 @@ struct OwnDeckPanel: View {
     }
 
     private func trailing(for tracked: TrackedCard) -> CardRow.Trailing {
-        if tracked.isCreated { return .label("GEN") }
+        if tracked.isCreated {
+            return tracked.count >= 2 ? .labelAndCount("GEN", tracked.count) : .label("GEN")
+        }
         let originalCount = tracked.count + tracked.drawnCount
         guard originalCount >= 2, tracked.count > 0 else { return .none }
         return .count(tracked.count)
@@ -537,6 +576,7 @@ struct CardRow: View {
         case none
         case count(Int)
         case label(String)
+        case labelAndCount(String, Int)
     }
 
     let cost: Int
@@ -592,6 +632,18 @@ struct CardRow: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(state == .justDrew ? Color(hex: "#7AE06A") : Tokens.textTertiary)
                 .tracking(0.3)
+        case .labelAndCount(let s, let n):
+            HStack(spacing: 4) {
+                Text(s)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(
+                        state == .justDrew ? Color(hex: "#7AE06A") : Tokens.textTertiary
+                    )
+                    .tracking(0.3)
+                Text("×\(n)")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Tokens.textTertiary)
+            }
         }
     }
 

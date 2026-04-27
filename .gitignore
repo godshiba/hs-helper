@@ -5,3 +5,5 @@
 *.profraw
 DerivedData/
 .DS_Store
+# Claude AI rules
+CLAUDE.md

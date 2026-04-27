@@ -193,8 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Player deck panel
         playerOverlay.show(
-            content: DeckTrackerView()
-                .environment(gameController)
+            content: DeckTrackerView(gameController: gameController)
                 .environmentObject(prefs)
                 .draggableOverlay(
                     onDrag: { [weak self] delta in
@@ -210,8 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Opponent panel
         if prefs.showOpponentPanel {
             opponentOverlay.show(
-                content: OpponentPanelView()
-                    .environment(gameController)
+                content: OpponentPanelView(gameController: gameController)
                     .environmentObject(prefs)
                     .draggableOverlay(
                         onDrag: { [weak self] delta in

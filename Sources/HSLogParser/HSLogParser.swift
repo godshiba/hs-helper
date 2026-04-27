@@ -67,6 +67,7 @@ public final class HSLogParser: @unchecked Sendable {
     /// localised card names in Russian / CJK locales). Buffer the incomplete
     /// first half and join it with the next line.
     private var pendingPartialPowerLine: String? = nil
+    private var emittedGameEntity: Bool = false
 
     // MARK: Public API
 
@@ -76,6 +77,7 @@ public final class HSLogParser: @unchecked Sendable {
     public func reset() {
         state = .idle
         pendingPartialPowerLine = nil
+        emittedGameEntity = false
     }
 
     /// Process one raw line from the log file.
@@ -191,6 +193,9 @@ public final class HSLogParser: @unchecked Sendable {
     /// Dispatch a top-level (non-indented) content string.
     private func dispatchTopLevelContent(_ s: String, rawLine: String) -> [LogEvent] {
         if s == "CREATE_GAME" {
+            if rawLine.contains("GameState.DebugPrintPower() - ") {
+                emittedGameEntity = false
+            }
             return []  // The GameEntity + Player sub-lines carry the real data.
         }
         if s.hasPrefix("GameEntity") {
@@ -332,6 +337,8 @@ public final class HSLogParser: @unchecked Sendable {
     // CREATE_GAME sub-line: "GameEntity EntityID=1"
     private func parseGameEntity(_ s: String) -> [LogEvent] {
         guard let id = extractInt(s, key: "EntityID") else { return [] }
+        if emittedGameEntity { return [] }
+        emittedGameEntity = true
         return [.gameCreated(gameEntityId: id)]
     }
 
