@@ -22,7 +22,7 @@ Instead of dealing with clunky Electron apps or heavy cross-platform frameworks,
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/hs-helper.git
+git clone https://github.com/godshiba/hs-helper.git
 cd hs-helper
 
 # Build the project (debug mode)
