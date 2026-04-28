@@ -397,8 +397,8 @@ public final class HSLogParser: @unchecked Sendable {
             }
         }
 
-        if let (id, cardId) = parseUpdatingLine(s) {
-            state = .entityTags(entityId: id, cardId: cardId, kind: kind, tags: [:])
+        if let (id, cardId, extraTags) = parseUpdatingLine(s) {
+            state = .entityTags(entityId: id, cardId: cardId, kind: kind, tags: extraTags)
             return flushed
         }
 
@@ -409,11 +409,11 @@ public final class HSLogParser: @unchecked Sendable {
             return flushed
         }
 
-        guard let (id, cardId) = parseEntityBracket(s) else {
+        guard let (id, cardId, extraTags) = parseEntityBracket(s) else {
             return flushed + [.parseWarning(line: s, reason: "Could not parse entity bracket")]
         }
 
-        state = .entityTags(entityId: id, cardId: cardId, kind: kind, tags: [:])
+        state = .entityTags(entityId: id, cardId: cardId, kind: kind, tags: extraTags)
         return flushed
     }
 
@@ -436,19 +436,19 @@ public final class HSLogParser: @unchecked Sendable {
     private func beginChangeEntityBlock(_ s: String) -> [LogEvent] {
         let flushed = flushPendingState()
 
-        guard let (id, newCardId) = parseUpdatingLine(s),
+        guard let (id, newCardId, extraTags) = parseUpdatingLine(s),
             let cid = newCardId, !cid.isEmpty
         else {
             return flushed + [.parseWarning(line: s, reason: "CHANGE_ENTITY missing cardId")]
         }
 
-        state = .changeEntityTags(entityId: id, cardId: cid, tags: [:])
+        state = .changeEntityTags(entityId: id, cardId: cid, tags: extraTags)
         return flushed
     }
 
     /// Parses "<TAG> - Updating <entity> CardID=<card>" lines.
     /// Returns (entityId, trailingCardId?) or nil if the entity can't be resolved.
-    private func parseUpdatingLine(_ s: String) -> (id: Int, cardId: String?)? {
+    private func parseUpdatingLine(_ s: String) -> (id: Int, cardId: String?, extraTags: [GameTag: String])? {
         guard let updRange = s.range(of: " - Updating ") else { return nil }
 
         let rest = String(s[updRange.upperBound...])
@@ -471,15 +471,15 @@ public final class HSLogParser: @unchecked Sendable {
 
         // Bracketed form — id lives inside the (possibly nested) bracket.
         if trimmed.hasPrefix("[") {
-            if let (id, _) = parseEntityBracket(trimmed) {
-                return (id, trailingCardId)
+            if let (id, _, extraTags) = parseEntityBracket(trimmed) {
+                return (id, trailingCardId, extraTags)
             }
             return nil
         }
 
         // Plain numeric entity id.
         if let n = Int(trimmed) {
-            return (n, trailingCardId)
+            return (n, trailingCardId, [:])
         }
 
         return nil
@@ -499,7 +499,7 @@ public final class HSLogParser: @unchecked Sendable {
         // Prefer the id inside the bracket (unambiguous). Fall back to the
         // legacy `id=N` at the top level if no bracket is present.
         var id: Int? = nil
-        if let (bid, _) = parseEntityBracket(s) {
+        if let (bid, _, _) = parseEntityBracket(s) {
             id = bid
         } else if let idRange = s.range(of: "id=") {
             id = Int(s[idRange.upperBound...].prefix(while: { $0.isNumber }))
@@ -563,7 +563,7 @@ public final class HSLogParser: @unchecked Sendable {
             if afterEntity.hasPrefix("[") {
                 if let close = afterEntity.firstIndex(of: "]") {
                     let bracket = String(afterEntity[afterEntity.startIndex...close])
-                    if let (id, _) = parseEntityBracket(bracket) {
+                    if let (id, _, _) = parseEntityBracket(bracket) {
                         entityRef = .id(id)
                     }
                 }
@@ -811,7 +811,7 @@ public final class HSLogParser: @unchecked Sendable {
     ///   [entityName=UNKNOWN ENTITY [cardType=INVALID] id=254 zone=SETASIDE cardId= player=1]
     ///
     /// Returns (id, cardId?) — cardId is nil when empty or absent.
-    private func parseEntityBracket(_ s: String) -> (id: Int, cardId: String?)? {
+    private func parseEntityBracket(_ s: String) -> (id: Int, cardId: String?, extraTags: [GameTag: String])? {
         guard let openBracket = s.firstIndex(of: "[") else { return nil }
 
         // Find the MATCHING close bracket by tracking depth — firstIndex(of:)
@@ -837,8 +837,31 @@ public final class HSLogParser: @unchecked Sendable {
         guard let id = extractBracketId(from: inner) else { return nil }
 
         let cardId = extractBracketCardId(from: inner)
+        let extraTags = extractBracketTags(from: inner)
 
-        return (id, cardId)
+        return (id, cardId, extraTags)
+    }
+
+    private func extractBracketTags(from inner: String) -> [GameTag: String] {
+        var tags: [GameTag: String] = [:]
+        
+        // Match player=N
+        if let playerRange = inner.range(of: "player=") {
+            let val = inner[playerRange.upperBound...].prefix(while: { $0.isNumber })
+            if !val.isEmpty {
+                tags[.controller] = String(val)
+            }
+        }
+        
+        // Match zone=ZONE
+        if let zoneRange = inner.range(of: "zone=") {
+            let val = inner[zoneRange.upperBound...].prefix(while: { $0.isLetter || $0 == "_" })
+            if !val.isEmpty {
+                tags[.zone] = String(val)
+            }
+        }
+        
+        return tags
     }
 
     /// Find `id=N` preceded by start-of-string or whitespace so it doesn't
@@ -877,7 +900,7 @@ public final class HSLogParser: @unchecked Sendable {
     private func parseEntityRef(_ s: String) -> EntityRef {
         let t = s.trimmingCharacters(in: .whitespaces)
         if t.hasPrefix("[") {
-            if let (id, _) = parseEntityBracket(t) {
+            if let (id, _, _) = parseEntityBracket(t) {
                 return .id(id)
             }
         }
@@ -891,7 +914,7 @@ public final class HSLogParser: @unchecked Sendable {
     private func parseEntityListLine(_ s: String) -> Int? {
         guard s.hasPrefix("Entities["),
             let eqIdx = s.firstIndex(of: "="),
-            let (id, _) = parseEntityBracket(String(s[s.index(after: eqIdx)...]))
+            let (id, _, _) = parseEntityBracket(String(s[s.index(after: eqIdx)...]))
         else {
             return nil
         }

@@ -98,10 +98,12 @@ struct OwnDeckPanel: View {
     let game: Game
 
     private var remainingCards: [TrackedCard] {
-        game.player.remainingDeck.sorted {
-            if $0.card.cost != $1.card.cost { return $0.card.cost < $1.card.cost }
-            return $0.card.name < $1.card.name
-        }
+        game.player.remainingDeck
+            .filter { !$0.isCreated || $0.count > 0 }
+            .sorted {
+                if $0.card.cost != $1.card.cost { return $0.card.cost < $1.card.cost }
+                return $0.card.name < $1.card.name
+            }
     }
 
     private var totalRemaining: Int {
