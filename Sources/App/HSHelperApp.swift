@@ -149,6 +149,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func applyPreferences() {
         playerOverlay.isLocked = prefs.overlayLocked
         opponentOverlay.isLocked = prefs.overlayLocked
+        playerOverlay.isClickThrough = prefs.overlayClickThrough
+        opponentOverlay.isClickThrough = prefs.overlayClickThrough
 
         let isRunning = installer.hearthstoneIsRunning
         let isActive = installer.hearthstoneIsActive
@@ -196,6 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             content: DeckTrackerView(gameController: gameController)
                 .environmentObject(prefs)
                 .draggableOverlay(
+                    isDisabled: prefs.overlayLocked,
                     onDrag: { [weak self] delta in
                         self?.playerOverlay.move(by: delta)
                     },
@@ -212,6 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 content: OpponentPanelView(gameController: gameController)
                     .environmentObject(prefs)
                     .draggableOverlay(
+                        isDisabled: prefs.overlayLocked,
                         onDrag: { [weak self] delta in
                             self?.opponentOverlay.move(by: delta)
                         },
@@ -228,6 +232,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Apply lock state from preferences.
         playerOverlay.isLocked = prefs.overlayLocked
         opponentOverlay.isLocked = prefs.overlayLocked
+        playerOverlay.isClickThrough = prefs.overlayClickThrough
+        opponentOverlay.isClickThrough = prefs.overlayClickThrough
     }
 
     private func positionOpponentPanel(on screen: NSScreen?) {
@@ -519,6 +525,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         prefs.overlayLocked.toggle()
         playerOverlay.isLocked = prefs.overlayLocked
         opponentOverlay.isLocked = prefs.overlayLocked
+        playerOverlay.isClickThrough = prefs.overlayClickThrough
+        opponentOverlay.isClickThrough = prefs.overlayClickThrough
         updateMenuBar()
     }
 

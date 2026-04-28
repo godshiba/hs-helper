@@ -297,6 +297,7 @@ public final class AppPreferences: ObservableObject, @unchecked Sendable {
         static let overlayOpacity = "hs-helper.overlayOpacity"
         static let overlayScale = "hs-helper.overlayScale"
         static let overlayLocked = "hs-helper.overlayLocked"
+        static let overlayClickThrough = "hs-helper.overlayClickThrough"
         static let showOpponentPanel = "hs-helper.showOpponentPanel"
         static let showResourcesRow = "hs-helper.showResourcesRow"
         static let dimExhaustedCards = "hs-helper.dimExhaustedCards"
@@ -341,6 +342,14 @@ public final class AppPreferences: ObservableObject, @unchecked Sendable {
         set {
             defaults.set(newValue, forKey: Key.overlayScale)
             objectWillChange.send()
+        }
+    }
+
+    public var overlayClickThrough: Bool {
+        get { defaults.object(forKey: Key.overlayClickThrough) as? Bool ?? false }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Key.overlayClickThrough)
         }
     }
 
@@ -585,7 +594,11 @@ private struct OverlayTab: View {
 
             Section("Interaction") {
                 Toggle("Hide when Hearthstone is backgrounded", isOn: $prefs.hideInBackground)
-                Toggle("Lock overlay position", isOn: $prefs.overlayLocked)
+                                Toggle("Lock overlay position", isOn: $prefs.overlayLocked)
+                                Toggle("Make overlay click-through", isOn: $prefs.overlayClickThrough)
+                Text("When click-through is enabled, you cannot scroll the tracker or see tooltips, but you can click the game underneath it.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
 
                 if !prefs.overlayLocked {
                     Label(

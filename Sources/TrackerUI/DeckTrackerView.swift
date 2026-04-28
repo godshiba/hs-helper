@@ -177,6 +177,7 @@ struct OwnDeckPanel: View {
                         }
                     }
                     .padding(.trailing, 2)
+                    .contentShape(Rectangle())
                 }
 
                 Spacer(minLength: 0)
@@ -315,6 +316,7 @@ struct OpponentPanel: View {
                         }
                     }
                     .padding(.trailing, 2)
+                    .contentShape(Rectangle())
                 }
 
                 Spacer(minLength: 0)

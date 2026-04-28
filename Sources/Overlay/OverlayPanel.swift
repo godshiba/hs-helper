@@ -106,10 +106,13 @@ public final class OverlayController {
     /// Whether the overlay is currently visible.
     public private(set) var isVisible: Bool = false
 
-    /// When true the panel ignores mouse events (click-through).
-    /// Set to false to enable drag-to-reposition.
-    public var isLocked: Bool = true {
-        didSet { panel?.ignoresMouseEvents = isLocked }
+    /// When true, the view rejects drag gestures.
+    public var isLocked: Bool = true
+
+    /// When true, the panel ignores mouse events entirely (click-through).
+    /// This disables scrolling and hover states.
+    public var isClickThrough: Bool = false {
+        didSet { panel?.ignoresMouseEvents = isClickThrough }
     }
 
     // MARK: Private
@@ -152,7 +155,7 @@ public final class OverlayController {
             hostingView = hosting
         }
 
-        panel!.ignoresMouseEvents = isLocked
+        panel!.ignoresMouseEvents = isClickThrough
         panel!.orderFrontRegardless()
         isVisible = true
     }
@@ -272,10 +275,12 @@ public final class OverlayController {
 public struct DraggableOverlayModifier: ViewModifier {
 
     @State private var previous: CGSize = .zero
+    private let isDisabled: Bool
     private let onDrag: (CGSize) -> Void
     private let onEnd: () -> Void
 
-    public init(onDrag: @escaping (CGSize) -> Void, onEnd: @escaping () -> Void) {
+    public init(isDisabled: Bool, onDrag: @escaping (CGSize) -> Void, onEnd: @escaping () -> Void) {
+        self.isDisabled = isDisabled
         self.onDrag = onDrag
         self.onEnd = onEnd
     }
@@ -283,6 +288,7 @@ public struct DraggableOverlayModifier: ViewModifier {
     public func body(content: Content) -> some View {
         content
             .gesture(
+                isDisabled ? nil :
                 DragGesture(minimumDistance: 2, coordinateSpace: .global)
                     .onChanged { value in
                         let delta = CGSize(
@@ -302,9 +308,10 @@ public struct DraggableOverlayModifier: ViewModifier {
 
 extension View {
     public func draggableOverlay(
+        isDisabled: Bool = false,
         onDrag: @escaping (CGSize) -> Void,
         onEnd: @escaping () -> Void = {}
     ) -> some View {
-        modifier(DraggableOverlayModifier(onDrag: onDrag, onEnd: onEnd))
+        modifier(DraggableOverlayModifier(isDisabled: isDisabled, onDrag: onDrag, onEnd: onEnd))
     }
 }
