@@ -98,39 +98,7 @@ struct OwnDeckPanel: View {
     let game: Game
 
     private var remainingCards: [TrackedCard] {
-        var originalRemaining: [String: Int] = [:]
-        var createdCounts: [String: Int] = [:]
-
-        for entity in game.entities(in: .deck, for: .player) {
-            if let cid = entity.cardId, !cid.isEmpty {
-                if entity.info.created {
-                    createdCounts[cid, default: 0] += 1
-                } else {
-                    originalRemaining[cid, default: 0] += 1
-                }
-            }
-        }
-
-        var result: [TrackedCard] = []
-
-        // 1. Original deck entries
-        for entry in game.player.deckList {
-            let count = originalRemaining[entry.card.id] ?? 0
-            var tracked = TrackedCard(card: entry.card, count: count)
-            tracked.drawnCount = entry.count - count
-            result.append(tracked)
-        }
-
-        // 2. Extra generated / shuffled cards
-        for extra in game.player.remainingDeck where extra.isCreated {
-            var tracked = extra
-            tracked.count = createdCounts[extra.card.id] ?? 0
-            if tracked.count > 0 {
-                result.append(tracked)
-            }
-        }
-
-        return result.sorted {
+        game.player.remainingDeck.sorted {
             if $0.card.cost != $1.card.cost { return $0.card.cost < $1.card.cost }
             return $0.card.name < $1.card.name
         }
